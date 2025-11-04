@@ -6,6 +6,7 @@ import os
 import sqlite3
 from groq import Groq
 from pypdf import PdfReader
+from openai import OpenAI
 
 
 import plotly.express as px
@@ -37,11 +38,11 @@ for c, texto in zip(
         )
 
 # --- CONFIGURAÇÃO 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "chave")
-if not GROQ_API_KEY:
-    st.error("A chave GROQ_API_KEY não foi definida corretamente!")
-    st.stop()
-client = Groq(api_key=GROQ_API_KEY)
+cliente = OpenAI(api_key=GROQ_API_KEY)
+response = client.chat.completions.create(
+    model="gpt-4o-mini",  
+    messages=[{"role": "user", "content": prompt}]
+)
 
 # --- BANCO DE DADOS
 DB_PATH = os.path.join(BASE_DIR, "arquivos.db")
