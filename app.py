@@ -1,14 +1,10 @@
-
-
 import streamlit as st
 import pandas as pd
 import os
 import sqlite3
-from groq import Groq
 from pypdf import PdfReader
 from openai import OpenAI
-
-
+from dotenv import load_dotenv
 import plotly.express as px
 
 # --- CONFIGURAÇÃO DE CAMINHOS DINÂMICOS 
@@ -37,12 +33,9 @@ for c, texto in zip(
             unsafe_allow_html=True
         )
 
-# --- CONFIGURAÇÃO 
-cliente = OpenAI(api_key=GROQ_API_KEY)
-response = client.chat.completions.create(
-    model="gpt-4o-mini",  
-    messages=[{"role": "user", "content": prompt}]
-)
+# --- CONFIGURAR OPENAI CLIENT
+load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # --- BANCO DE DADOS
 DB_PATH = os.path.join(BASE_DIR, "arquivos.db")
@@ -66,43 +59,57 @@ with st.sidebar:
         type=["pdf"]
     )
 
-# --- Processar arquivos
+# --- Processar arquivos e salvar no banco
 if uploaded_files:
     for uploaded_file in uploaded_files:
         pdf_reader = PdfReader(uploaded_file)
         text = ""
         for page in pdf_reader.pages:
             text += page.extract_text() or ""
-        # Salva no banco
         cursor.execute("INSERT INTO arquivos (nome, conteudo) VALUES (?, ?)", 
                        (uploaded_file.name, text))
         conn.commit()
         st.success(f"Arquivo '{uploaded_file.name}' salvo no banco de dados!")
 
-# --- Validador
-cursor.execute("SELECT COUNT(*) FROM arquivos")
-num_files = cursor.fetchone()[0]
+# --- Carregar conteúdo dos PDFs para contexto
+cursor.execute("SELECT nome, conteudo FROM arquivos")
+all_files = cursor.fetchall()
+context = "\n\n".join([f"Arquivo: {n}\nConteúdo: {c[:3000]}" for n, c in all_files]) if all_files else ""
 
-user_query = st.text_area("Digite sua pergunta:")
+# --- Inicializar histórico de mensagens
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "system", "content": "Você é um analista de dados que responde com base nos PDFs carregados."}
+    ]
 
-if st.button("Enviar Pergunta"):
-    if num_files == 0:
-        st.warning("Por favor, envie ao menos um arquivo PDF antes de fazer perguntas.")
-    elif not user_query.strip():
-        st.warning("Digite uma pergunta antes de enviar.")
+# --- Mostrar histórico do chat
+st.write("### 💬 Chat:")
+for msg in st.session_state.messages[1:]:
+    if msg["role"] == "user":
+        st.markdown(f"🧑‍💻 **Você:** {msg['content']}")
     else:
-        # Recupera todo o conteúdo do banco para o contexto
-        cursor.execute("SELECT nome, conteudo FROM arquivos")
-        all_files = cursor.fetchall()
-        context = "\n\n".join([f"Arquivo: {n}\nConteúdo: {c[:3000]}" for n, c in all_files])  # limita texto
-        prompt = f"Você é um analista de dados. Use as informações abaixo para responder:\n\n{context}\n\nPergunta: {user_query}"
+        st.markdown(f"🤖 **Agente:** {msg['content']}")
 
-        response = client.chat.completions.create(
-            model="llama3-8b-8192",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        st.write("### Resposta do Agente:")
-        st.write(response.choices[0].message.content)
+# --- Caixa de entrada
+user_query = st.chat_input("Digite sua pergunta sobre os PDFs...")
 
-# Fecha a conexão
+# --- Quando o usuário envia uma nova pergunta
+if user_query:
+    st.session_state.messages.append({"role": "user", "content": user_query})
+
+    # Adiciona contexto dos PDFs
+    prompt = f"Use as informações dos arquivos abaixo para responder:\n\n{context}\n\nPergunta: {user_query}"
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=st.session_state.messages + [{"role": "user", "content": prompt}]
+    )
+
+    answer = response.choices[0].message.content
+    st.session_state.messages.append({"role": "assistant", "content": answer})
+
+    # Atualiza a interface
+    st.rerun()
+
+# Fecha conexão
 conn.close()
